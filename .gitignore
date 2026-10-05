@@ -1,0 +1,27 @@
+# Ambiente e variáveis locais
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+venv/
+.venv/
+env/
+
+# Banco de dados e caches locais
+*.db
+*.sqlite3
+data/*.db
+
+# Sistema e IDEs
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.log

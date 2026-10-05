@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Otimizador de Rotas de Entrega | Estofados (Beta MVP)</title>
+  <link rel="stylesheet" href="vendor/leaflet.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Cabeçalho Principal -->
+  <header class="app-header">
+    <div class="header-container">
+      <div class="logo-area">
+        <span class="logo-icon">🛋️</span>
+        <div>
+          <h1>Logística Estofados</h1>
+          <p class="subtitle">Otimizador de Rotas e Romaneio de Entrega</p>
+        </div>
+      </div>
+      <div class="header-badges">
+        <span class="badge badge-beta">Versão Beta (MVP)</span>
+        <span class="badge badge-kiss" title="Keep It Simple, Clean & Fast">Metodologia KISS</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="main-container">
+    <!-- Seção Superior: Origem & Ingestão -->
+    <div class="grid-two-columns">
+      <!-- Card: Ponto de Partida (Fábrica) -->
+      <section class="card factory-card">
+        <div class="card-header">
+          <h2>🏭 Ponto de Partida (Fábrica / Origem)</h2>
+        </div>
+        <div class="card-body">
+          <div class="form-group">
+            <label for="factoryCep">CEP da Fábrica:</label>
+            <div class="input-with-button">
+              <input type="text" id="factoryCep" value="13170-023" maxlength="9" placeholder="13170-023">
+              <button type="button" id="btnUpdateFactory" class="btn btn-secondary">Atualizar Fábrica</button>
+            </div>
+          </div>
+          <div id="factoryAddressInfo" class="factory-info-box">
+            <strong>Fábrica Sumaré:</strong> Av. Rebouças, Centro, Sumaré - SP
+          </div>
+          <div class="route-options">
+            <label class="checkbox-label">
+              <input type="checkbox" id="chkReturnFactory">
+              <span>Retornar à fábrica ao final da rota (circuito fechado)</span>
+            </label>
+            <div class="inline-option">
+              <label for="unloadTime">Descarga média por estofado:</label>
+              <input type="number" id="unloadTime" value="20" min="5" max="120"> min
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Card: Ingestão de CEPs -->
+      <section class="card input-card">
+        <div class="card-header flex-between">
+          <h2>📦 Ingestão Rápida de Entregas</h2>
+          <div class="quick-actions">
+            <button type="button" id="btnLoadExample" class="btn btn-outline" title="Carregar cidades citadas na especificação: Sumaré, Nova Odessa, Sta. Bárbara, Piracicaba e Campinas">
+              ✨ Exemplo RMC
+            </button>
+            <button type="button" id="btnClearInput" class="btn btn-ghost" title="Limpar campo">
+              🗑️ Limpar
+            </button>
+          </div>
+        </div>
+        <div class="card-body">
+          <label for="cepsInput" class="helper-text">
+            Cole os CEPs das entregas do dia (um por linha ou separados por vírgula). Você pode incluir anotações após o CEP (ex: <em>13010-001 - Sofá 3 Lugares Suede</em>):
+          </label>
+          <textarea id="cepsInput" rows="7" placeholder="Exemplos:&#10;13010-001 - Sofá Retrátil Cinza&#10;13450-029 - Poltrona Reclinável&#10;13190-000 - Sofá de Canto Bege&#10;13400-015 - Puff e Chaise"></textarea>
+          
+          <div class="action-footer">
+            <span id="inputCountFeedback" class="text-muted">0 linhas detectadas</span>
+            <button type="button" id="btnGeocode" class="btn btn-primary">
+              🔍 1. Validar & Geocodificar CEPs
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Feedback de Erros / Alertas -->
+    <section id="alertBox" class="alert-box alert-error hidden" role="alert">
+      <div class="alert-icon">⚠️</div>
+      <div class="alert-content" id="alertContent"></div>
+    </section>
+
+    <!-- Seção de Paradas Validadas -->
+    <section id="sectionValidated" class="card hidden">
+      <div class="card-header flex-between">
+        <h2>📍 Destinos Identificados (<span id="validCount">0</span>)</h2>
+        <button type="button" id="btnOptimize" class="btn btn-success btn-pulse">
+          ⚡ 2. Otimizar Rota de Entrega (Menor Distância)
+        </button>
+      </div>
+      <div class="card-body">
+        <div class="table-responsive">
+          <table class="data-table" id="tableValidated">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>CEP</th>
+                <th>Logradouro / Bairro</th>
+                <th>Cidade / UF</th>
+                <th>Item / Nota</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="tbodyValidated"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Seção de Resultados do Romaneio Otimizado -->
+    <section id="sectionResults" class="hidden">
+      <!-- Métricas Resumo -->
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-label">Paradas de Entrega</div>
+          <div class="metric-value" id="metricStops">0</div>
+          <div class="metric-sub" id="metricStopsSub">Excluindo fábrica</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Distância Total Estimada</div>
+          <div class="metric-value"><span id="metricDistance">0</span> <small>km</small></div>
+          <div class="metric-sub">Trajeto otimizado via algoritmo TSP</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Tempo Total Estimado</div>
+          <div class="metric-value" id="metricTime">0h 00m</div>
+          <div class="metric-sub" id="metricTimeSub">Viagem + Descarga</div>
+        </div>
+        <div class="metric-card highlight-card">
+          <div class="metric-label">Navegação Integrada</div>
+          <a id="btnOpenFullMaps" href="#" target="_blank" rel="noopener noreferrer" class="btn btn-maps">
+            🗺️ Rota Completa no Google Maps
+          </a>
+        </div>
+      </div>
+
+      <!-- Barra de Ações Rápidas -->
+      <div class="romaneio-actions-bar print-hidden">
+        <button type="button" id="btnCopyWhatsApp" class="btn btn-outline-whatsapp">
+          💬 Copiar para WhatsApp
+        </button>
+        <button type="button" id="btnPrintRomaneio" class="btn btn-outline">
+          🖨️ Imprimir Romaneio (A4)
+        </button>
+        <button type="button" id="btnSaveHistory" class="btn btn-outline">
+          💾 Salvar Romaneio
+        </button>
+      </div>
+
+      <!-- Grid com Mapa e Sequência -->
+      <div class="grid-map-and-list">
+        <!-- Mapa Interativo Leaflet -->
+        <div class="card map-container-card print-hidden">
+          <div class="card-header flex-between">
+            <h3>🗺️ Traçado da Rota Otimizada</h3>
+            <span class="text-muted" style="font-size: 0.85rem;">Marcadores numerados por sequência de entrega</span>
+          </div>
+          <div class="card-body no-padding">
+            <div id="routeMap" class="leaflet-map-element"></div>
+          </div>
+        </div>
+
+        <!-- Lista Numerada de Paradas (Romaneio Oficial) -->
+        <div class="card itinerary-card" id="printableRomaneio">
+          <div class="card-header romaneio-title-header">
+            <div>
+              <h3>📋 Romaneio Sequencial de Entregas</h3>
+              <p class="text-muted romaneio-date" id="romaneioTimestamp"></p>
+            </div>
+            <div class="romaneio-origem-badge">
+              Partida: <strong id="romaneioOrigemLabel">Sumaré - SP</strong>
+            </div>
+          </div>
+          <div class="card-body no-padding">
+            <div class="timeline" id="stopsTimeline"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Seção de Histórico de Romaneios -->
+    <section class="card history-card print-hidden">
+      <div class="card-header flex-between">
+        <h3>🕒 Romaneios Recentes</h3>
+        <button type="button" id="btnRefreshHistory" class="btn btn-ghost">Atualizar</button>
+      </div>
+      <div class="card-body">
+        <div id="historyList" class="history-list">
+          <p class="text-muted">Nenhum romaneio recente salvo ainda.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Rodapé -->
+  <footer class="app-footer print-hidden">
+    <div class="footer-container">
+      <p>🚚 <strong>Logística Estofados</strong> &bull; Sistema de Roteirização Inteligente &bull; MVP Beta</p>
+      <p class="text-muted">Geocodificação via BrasilAPI &amp; ViaCEP &bull; Otimização de Rota via Heurística 2-Opt</p>
+    </div>
+  </footer>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- Scripts -->
+  <script src="vendor/leaflet.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
