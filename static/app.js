@@ -204,7 +204,7 @@ document.addEventListener("DOMContentLoaded", () => {
     return { ordered: bestTour, totalDist: Number(bestDist.toFixed(2)) };
   }
 
-  // --- GEOCODIFICAÇÃO (CLIENT-SIDE & CORS) ---
+  // --- GEOCODIFICAÇÃO EM CAMADAS DE ALTA PRECISÃO ---
 
   async function fetchWithTimeout(url, timeoutMs = 4500) {
     const controller = new AbortController();
@@ -218,6 +218,35 @@ document.addEventListener("DOMContentLoaded", () => {
       clearTimeout(id);
       return null;
     }
+  }
+
+  async function geocodeHierarchicalNominatim(logradouro, bairro, localidade, uf) {
+    // Tentativas hierárquicas: Rua + Bairro -> Rua -> Bairro -> Cidade
+    const queries = [];
+    if (logradouro && bairro && localidade) {
+      queries.push(`${logradouro}, ${bairro}, ${localidade}, ${uf}, Brasil`);
+    }
+    if (logradouro && localidade) {
+      queries.push(`${logradouro}, ${localidade}, ${uf}, Brasil`);
+    }
+    if (bairro && localidade) {
+      queries.push(`${bairro}, ${localidade}, ${uf}, Brasil`);
+    }
+    if (localidade) {
+      queries.push(`${localidade}, ${uf}, Brasil`);
+    }
+
+    for (const q of queries) {
+      const encoded = encodeURIComponent(q);
+      const data = await fetchWithTimeout(`https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=1&countrycodes=br`, 3500);
+      if (Array.isArray(data) && data.length > 0 && data[0].lat && data[0].lon) {
+        return {
+          lat: parseFloat(data[0].lat),
+          lon: parseFloat(data[0].lon)
+        };
+      }
+    }
+    return null;
   }
 
   async function geocodeSingleCep(cepDigits) {
@@ -235,7 +264,9 @@ document.addEventListener("DOMContentLoaded", () => {
       lon: null
     };
 
-    // 1. BrasilAPI v2 (Retorna logradouro, bairro, cidade e coordenadas diretas)
+    let fallbackCoords = null;
+
+    // 1. BrasilAPI v2 (Retorna logradouro, bairro, cidade, UF)
     const bApi = await fetchWithTimeout(`https://brasilapi.com.br/api/cep/v2/${cepDigits}`);
     if (bApi && !bApi.errors && bApi.city) {
       res.logradouro = bApi.street || "";
@@ -245,8 +276,10 @@ document.addEventListener("DOMContentLoaded", () => {
       if (bApi.location && bApi.location.coordinates) {
         const c = bApi.location.coordinates;
         if (c.latitude && c.longitude) {
-          res.lat = parseFloat(c.latitude);
-          res.lon = parseFloat(c.longitude);
+          fallbackCoords = {
+            lat: parseFloat(c.latitude),
+            lon: parseFloat(c.longitude)
+          };
         }
       }
     }
@@ -262,21 +295,17 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
-    // 3. OpenStreetMap Nominatim se faltar latitude/longitude
-    if (res.localidade && res.lat === null) {
-      const addrQuery = encodeURIComponent(`${res.logradouro}, ${res.bairro}, ${res.localidade}, ${res.uf}, Brasil`);
-      const nom = await fetchWithTimeout(`https://nominatim.openstreetmap.org/search?q=${addrQuery}&format=json&limit=1&countrycodes=br`);
-      if (Array.isArray(nom) && nom.length > 0) {
-        res.lat = parseFloat(nom[0].lat);
-        res.lon = parseFloat(nom[0].lon);
-      } else {
-        // Fallback centro do município
-        const cityQuery = encodeURIComponent(`${res.localidade}, ${res.uf}, Brasil`);
-        const nomCity = await fetchWithTimeout(`https://nominatim.openstreetmap.org/search?q=${cityQuery}&format=json&limit=1&countrycodes=br`);
-        if (Array.isArray(nomCity) && nomCity.length > 0) {
-          res.lat = parseFloat(nomCity[0].lat);
-          res.lon = parseFloat(nomCity[0].lon);
-        }
+    // 3. Geocodificação em nível de RUA/BAIRRO via OpenStreetMap Nominatim
+    // IMPORTANTE: Busca endereço específico para não herdar apenas o centróide municipal repetido da BrasilAPI
+    if (res.localidade) {
+      const preciseCoords = await geocodeHierarchicalNominatim(res.logradouro, res.bairro, res.localidade, res.uf);
+      if (preciseCoords) {
+        res.lat = preciseCoords.lat;
+        res.lon = preciseCoords.lon;
+      } else if (fallbackCoords) {
+        // Se a busca nominal falhar, utiliza as coordenadas da BrasilAPI como fallback
+        res.lat = fallbackCoords.lat;
+        res.lon = fallbackCoords.lon;
       }
     }
 
@@ -348,7 +377,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const validItems = [];
     const invalidItems = [];
 
-    for (const line of lines) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
       const cepDigits = sanitizeCep(line);
       let nota = "";
       const matchNote = line.match(/(\d{5}-?\d{3})\s*[-–:]?\s*(.+)/);
@@ -369,6 +399,19 @@ document.addEventListener("DOMContentLoaded", () => {
           ...geo,
           nota: nota || "Estofado"
         });
+      }
+    }
+
+    // Proteção contra coordenadas 100% sobrepostas se pontos diferentes caírem no mesmo centróide
+    for (let i = 0; i < validItems.length; i++) {
+      for (let j = i + 1; j < validItems.length; j++) {
+        const diffLat = Math.abs(validItems[i].lat - validItems[j].lat);
+        const diffLon = Math.abs(validItems[i].lon - validItems[j].lon);
+        if (diffLat < 0.0001 && diffLon < 0.0001 && validItems[i].cep !== validItems[j].cep) {
+          // Micro-afastamento para evitar marcadores empilhados e distância zero
+          validItems[j].lat += (j * 0.0008);
+          validItems[j].lon += (j * 0.0008);
+        }
       }
     }
 
@@ -426,7 +469,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const { ordered, totalDist } = solveTsp(state.factory, state.validatedStops, returnToOrigin);
 
-    // Enriquecimento com distâncias por trecho e tempos
+    // Enriquecimento com distâncias por trecho e tempos realistas
     let curLat = state.factory.lat;
     let curLon = state.factory.lon;
     let acumDist = 0;
@@ -435,7 +478,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const enrichedStops = ordered.map((stop, idx) => {
       const trechoDist = haversineKm(curLat, curLon, stop.lat, stop.lon);
       acumDist += trechoDist;
-      const trechoTempo = Math.round((trechoDist / speedKmh) * 60);
+      // Garante que o tempo nunca seja 0 min se houver deslocamento
+      const calcMin = Math.round((trechoDist / speedKmh) * 60);
+      const trechoTempo = trechoDist > 0.05 ? Math.max(1, calcMin) : 0;
       acumTempoMin += trechoTempo + unloadMin;
 
       const googleNavUrl = `https://www.google.com/maps/dir/?api=1&destination=${stop.lat},${stop.lon}`;
@@ -460,7 +505,8 @@ document.addEventListener("DOMContentLoaded", () => {
     let retornoInfo = null;
     if (returnToOrigin && enrichedStops.length > 0) {
       const retDist = haversineKm(curLat, curLon, state.factory.lat, state.factory.lon);
-      const retTempo = Math.round((retDist / speedKmh) * 60);
+      const calcRetMin = Math.round((retDist / speedKmh) * 60);
+      const retTempo = retDist > 0.05 ? Math.max(1, calcRetMin) : 0;
       acumDist += retDist;
       acumTempoMin += retTempo;
       retornoInfo = { distancia_km: retDist, tempo_min: retTempo };
@@ -499,8 +545,10 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     state.currentRomaneio = romaneioData;
-    renderRomaneioResults(romaneioData);
+
+    // IMPORTANTE: Remove a classe hidden ANTES de renderizar o mapa para que o Leaflet calcule a largura correta
     elements.sectionResults.classList.remove("hidden");
+    renderRomaneioResults(romaneioData);
     elements.sectionResults.scrollIntoView({ behavior: "smooth", block: "start" });
     showToast("Rota otimizada calculada com sucesso!");
 
@@ -592,17 +640,21 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // --- MAPA INTERATIVO (LEAFLET) ---
+  // --- MAPA INTERATIVO (LEAFLET ULTRA RÁPIDO VIA CARTODB CDN) ---
 
   function initMapIfNeeded() {
     if (!state.map) {
       const mapEl = document.getElementById("routeMap");
       if (!mapEl) return;
       state.map = L.map(mapEl).setView([state.factory.lat, state.factory.lon], 11);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+
+      // Camada de Tiles Ultra Rápida via CartoDB Voyager CDN (servido via Fastly Edge no Brasil)
+      L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
         maxZoom: 19,
-        attribution: '&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>'
+        subdomains: "abcd",
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
       }).addTo(state.map);
+
       state.mapLayerGroup = L.layerGroup().addTo(state.map);
     }
   }
@@ -669,9 +721,24 @@ document.addEventListener("DOMContentLoaded", () => {
         opacity: 0.8,
         dashArray: "6, 8"
       }).addTo(state.mapLayerGroup);
-
-      state.map.fitBounds(L.latLngBounds(points), { padding: [40, 40] });
     }
+
+    // CORREÇÃO CRÍTICA DO MAPA CINZA: Invalida o tamanho após o container ficar visível
+    setTimeout(() => {
+      if (state.map) {
+        state.map.invalidateSize();
+        if (points.length > 1) {
+          state.map.fitBounds(L.latLngBounds(points), { padding: [40, 40] });
+        }
+      }
+    }, 150);
+
+    // Segundo reforço para garantir em conexões mais lentas ou telas mobile
+    setTimeout(() => {
+      if (state.map) {
+        state.map.invalidateSize();
+      }
+    }, 450);
   }
 
   // --- WHATSAPP & CLIPBOARD ---
@@ -785,8 +852,8 @@ document.addEventListener("DOMContentLoaded", () => {
         div.querySelector(".btn-load-past").addEventListener("click", () => {
           state.currentRomaneio = item.dados;
           state.validatedStops = item.dados.paradas || [];
-          renderRomaneioResults(item.dados);
           elements.sectionResults.classList.remove("hidden");
+          renderRomaneioResults(item.dados);
           elements.sectionResults.scrollIntoView({ behavior: "smooth" });
           showToast("Romaneio carregado do histórico!");
         });

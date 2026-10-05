@@ -547,6 +547,14 @@ textarea {
   flex-direction: column;
 }
 
+.itinerary-card .card-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .romaneio-title-header {
   display: flex;
   align-items: center;
@@ -569,8 +577,31 @@ textarea {
 
 .timeline {
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 1rem;
   flex: 1;
+  min-height: 0;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 #f1f5f9;
+}
+
+.timeline::-webkit-scrollbar {
+  width: 8px;
+}
+
+.timeline::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 4px;
+}
+
+.timeline::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 4px;
+}
+
+.timeline::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
 }
 
 .timeline-item {

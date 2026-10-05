@@ -243,10 +243,8 @@ def geocode_cep(cep: str) -> Optional[Dict[str, Any]]:
         if loc and isinstance(loc, dict) and loc.get("coordinates"):
             coords = loc["coordinates"]
             try:
-                lat = float(coords.get("latitude"))
-                lon = float(coords.get("longitude"))
-                result["latitude"] = lat
-                result["longitude"] = lon
+                result["fallback_latitude"] = float(coords.get("latitude"))
+                result["fallback_longitude"] = float(coords.get("longitude"))
             except (ValueError, TypeError):
                 pass
 
@@ -260,24 +258,34 @@ def geocode_cep(cep: str) -> Optional[Dict[str, Any]]:
             result["uf"] = viacep.get("uf", "")
             result["fonte"] = "viacep"
 
-    # Se ainda não encontramos coordenadas geográficas:
-    if result["latitude"] is None and result["localidade"]:
-        # Tenta Nominatim com logradouro + cidade
-        addr_str = f"{result['logradouro']}, {result['bairro']}, {result['localidade']}, {result['uf']}, Brasil"
-        coords = geocode_address_nominatim(addr_str)
+    # Geocodificação em nível de logradouro/bairro (alta precisão)
+    if result["localidade"]:
+        coords = None
+        # 1. Rua + Bairro + Cidade
+        if result["logradouro"] and result["bairro"]:
+            coords = geocode_address_nominatim(f"{result['logradouro']}, {result['bairro']}, {result['localidade']}, {result['uf']}, Brasil")
+        # 2. Rua + Cidade
         if not coords and result["logradouro"]:
-            # Tenta sem bairro
             coords = geocode_address_nominatim(f"{result['logradouro']}, {result['localidade']}, {result['uf']}, Brasil")
-        if not coords:
-            # Fallback para o centro da cidade
-            coords = geocode_address_nominatim(f"{result['localidade']}, {result['uf']}, Brasil")
+        # 3. Bairro + Cidade
+        if not coords and result["bairro"]:
+            coords = geocode_address_nominatim(f"{result['bairro']}, {result['localidade']}, {result['uf']}, Brasil")
 
         if coords:
             result["latitude"] = coords[0]
             result["longitude"] = coords[1]
+        elif "fallback_latitude" in result:
+            result["latitude"] = result["fallback_latitude"]
+            result["longitude"] = result["fallback_longitude"]
+        else:
+            # Fallback cidade
+            coords = geocode_address_nominatim(f"{result['localidade']}, {result['uf']}, Brasil")
+            if coords:
+                result["latitude"] = coords[0]
+                result["longitude"] = coords[1]
 
     # Se encontramos endereço e coordenadas válidas, persiste no cache
-    if result["localidade"] and result["latitude"] is not None:
+    if result["localidade"] and result.get("latitude") is not None:
         save_cep_to_cache(result)
         return result
 
